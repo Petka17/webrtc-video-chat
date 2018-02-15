@@ -7,8 +7,6 @@ var socket = io.connect();
 var localVideo = document.querySelector('#localVideo');
 var remoteVideo = document.querySelector('#remoteVideo');
 
-var pc;
-
 var room = prompt('Enter room name:');
 
 if (room !== '') {
@@ -20,9 +18,9 @@ function sendMessage(message) {
 }
 
 function initPeerConnection() {
-  var localPC = new RTCPeerConnection(null);
+  var pc = new RTCPeerConnection(null);
 
-  localPC.onicecandidate = function(e) {
+  pc.onicecandidate = function(e) {
     if (e.candidate) {
       sendMessage({
         type: 'candidate',
@@ -33,18 +31,18 @@ function initPeerConnection() {
     }
   };
 
-  localPC.onaddstream = function(e) {
+  pc.onaddstream = function(e) {
     remoteVideo.srcObject = e.stream;
   };
 
-  return localPC;
+  return pc;
 }
 
 var initPC$ = Observable.of(initPeerConnection());
 
 var getMediaStream$ = Observable.fromPromise(
   navigator.mediaDevices.getUserMedia({
-    audio: false,
+    audio: true,
     video: true
   })
 );
@@ -77,15 +75,16 @@ fullNotify$.subscribe(function(room) {
   alert("The " + room + "is full");
 });
 
-readyForOffer$
-  .switchMap(function() { 
-    return getMediaStream$; 
-  })
-  .subscribe(function(stream) {
-    pc = initPeerConnection();
+Observable
+  .zip(initPC$, getMediaStream$, readyForOffer$)
+  .subscribe(function(val) {
+    var pc = val[0];
+    var stream = val[1];
+
     pc.addStream(stream);
+    
     pc.createOffer().then(
-      function (sessionDesc) {
+      function(sessionDesc) {
         pc.setLocalDescription(sessionDesc);
         sendMessage(sessionDesc);
       }
@@ -96,35 +95,48 @@ readyForOffer$
     );
   });
 
-Observable.zip(getOfferSD$, getMediaStream$).subscribe(function (val) {
-  var message = val[0];
-  var stream = val[1];
+Observable
+  .zip(initPC$, getMediaStream$, getOfferSD$)
+  .subscribe(function(val) {
+    var pc = val[0];
+    var stream = val[1];
+    var message = val[2];
 
-  pc = initPeerConnection();
-  pc.addStream(stream);
-  pc.setRemoteDescription(new RTCSessionDescription(message));
-  pc.createAnswer().then(
-    function (sessionDesc) {
-      pc.setLocalDescription(sessionDesc);
-      sendMessage(sessionDesc);
-    }
-  ).catch(
-  function (err) {
-    console.error('Failed to create session description: ' + err.toString());
-  }
-  );
-});
-
-getAnswerSD$.subscribe(function(message) {
-  pc.setRemoteDescription(new RTCSessionDescription(message));
-});
-
-getCandidate$.subscribe(function(message) {
-  var candidate = new RTCIceCandidate({
-    sdpMLineIndex: message.label,
-    candidate: message.candidate
+    pc.addStream(stream);
+    pc.setRemoteDescription(new RTCSessionDescription(message));
+    
+    pc.createAnswer().then(
+      function(sessionDesc) {
+        pc.setLocalDescription(sessionDesc);
+        sendMessage(sessionDesc);
+      }
+    ).catch(
+      function(err) {
+        console.error('Failed to create session description: ' + err.toString());
+      }
+    );
   });
 
-  pc.addIceCandidate(candidate);
-});
+Observable
+  .zip(initPC$, getAnswerSD$)
+  .subscribe(function(val) {
+    var pc = val[0];
+    var message = val[1];
+
+    pc.setRemoteDescription(new RTCSessionDescription(message));
+  });
+
+Observable
+  .zip(initPC$, getCandidate$)
+  .subscribe(function(val) {
+    var pc = val[0];
+    var message = val[1];
+
+    var candidate = new RTCIceCandidate({
+      sdpMLineIndex: message.label,
+      candidate: message.candidate
+    });
+
+    pc.addIceCandidate(candidate);
+  });
 
